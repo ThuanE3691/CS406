@@ -5,8 +5,9 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const clearButton = document.getElementById("clear-button");
 
-let isMouseDown = false;
+let isDrawing = false;
 let hasIntroText = true;
+
 let lastX = 0;
 let lastY = 0;
 
@@ -26,27 +27,9 @@ ctx.fillText("Loading...", CANVAS_SIZE / 2, CANVAS_SIZE / 2);
 // Set the line color for the canvas.
 ctx.strokeStyle = "#212121";
 
-function clearCanvas() {
-	ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-	for (let i = 0; i < 10; i++) {
-		const element = document.getElementById(`prediction-${i}`);
-		element.className = "prediction-col";
-		element.children[0].children[0].style.height = "0";
-	}
-}
-
-function drawLine(fromX, fromY, toX, toY) {
-	// Draws a line from (fromX, fromY) to (toX, toY).
-	ctx.beginPath();
-	ctx.moveTo(fromX, fromY);
-	ctx.lineTo(toX, toY);
-	ctx.closePath();
-	ctx.stroke();
-	updatePredictions();
-}
-
 async function updatePredictions() {
 	// Get the predictions for the canvas data.
+
 	const imgData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 	const input = new onnx.Tensor(new Float32Array(imgData.data), "float32");
 
@@ -65,8 +48,26 @@ async function updatePredictions() {
 	}
 }
 
+function clearCanvas() {
+	ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+	for (let i = 0; i < 10; i++) {
+		const element = document.getElementById(`prediction-${i}`);
+		element.className = "prediction-col";
+		element.children[0].children[0].style.height = "0";
+	}
+}
+
+function drawLine(fromX, fromY, toX, toY) {
+	ctx.beginPath();
+	ctx.moveTo(fromX, fromY);
+	ctx.lineTo(toX, toY);
+	ctx.closePath();
+	ctx.stroke();
+	updatePredictions();
+}
+
 function canvasMouseDown(event) {
-	isMouseDown = true;
+	isDrawing = true;
 	if (hasIntroText) {
 		clearCanvas();
 		hasIntroText = false;
@@ -74,12 +75,6 @@ function canvasMouseDown(event) {
 	const x = event.offsetX / CANVAS_SCALE;
 	const y = event.offsetY / CANVAS_SCALE;
 
-	// To draw a dot on the mouse down event, we set laxtX and lastY to be
-	// slightly offset from x and y, and then we call `canvasMouseMove(event)`,
-	// which draws a line from (laxtX, lastY) to (x, y) that shows up as a
-	// dot because the difference between those points is so small. However,
-	// if the points were the same, nothing would be drawn, which is why the
-	// 0.001 offset is added.
 	lastX = x + 0.001;
 	lastY = y + 0.001;
 	canvasMouseMove(event);
@@ -88,7 +83,7 @@ function canvasMouseDown(event) {
 function canvasMouseMove(event) {
 	const x = event.offsetX / CANVAS_SCALE;
 	const y = event.offsetY / CANVAS_SCALE;
-	if (isMouseDown) {
+	if (isDrawing) {
 		drawLine(lastX, lastY, x, y);
 	}
 	lastX = x;
@@ -96,68 +91,23 @@ function canvasMouseMove(event) {
 }
 
 function bodyMouseUp() {
-	isMouseDown = false;
+	isDrawing = false;
 }
 
 function bodyMouseOut(event) {
-	// We won't be able to detect a MouseUp event if the mouse has moved
-	// ouside the window, so when the mouse leaves the window, we set
-	// `isMouseDown` to false automatically. This prevents lines from
-	// continuing to be drawn when the mouse returns to the canvas after
-	// having been released outside the window.
 	if (!event.relatedTarget || event.relatedTarget.nodeName === "HTML") {
-		isMouseDown = false;
+		isDrawing = false;
 	}
 }
 
-function touchstart(event) {
-	canvasMouseDown(event.touches[0]);
-}
-function touchmove(event) {
-	canvasMouseMove(event.touches[0]);
-	event.preventDefault();
-}
-function touchend() {
-	bodyMouseUp();
-}
-
 loadingModelPromise.then(() => {
-	canvas.addEventListener("touchstart", touchstart);
-	canvas.addEventListener("touchmove", touchmove);
-	canvas.addEventListener("touchend", touchend);
+	canvas.addEventListener("touchstart", handleStart);
+	canvas.addEventListener("touchend", handleEnd);
+	canvas.addEventListener("touchcancel", handleCancel);
+	canvas.addEventListener("touchmove", handleMove);
+
 	canvas.addEventListener("mousedown", canvasMouseDown);
 	canvas.addEventListener("mousemove", canvasMouseMove);
-
-	// var canvas = document.getElementById("canvas");
-	// var context = canvas.getContext("2d");
-	// var isIdle = true;
-
-	// function drawstart(event) {
-	// 	context.beginPath();
-	// 	context.moveTo(
-	// 		event.pageX - canvas.offsetLeft,
-	// 		event.pageY - canvas.offsetTop
-	// 	);
-	// 	isIdle = false;
-	// }
-	// function drawmove(event) {
-	// 	if (isIdle) return;
-	// 	context.lineTo(
-	// 		event.pageX - canvas.offsetLeft,
-	// 		event.pageY - canvas.offsetTop
-	// 	);
-	// 	context.stroke();
-	// 	updatePredictions();
-	// }
-	// function drawend(event) {
-	// 	if (isIdle) return;
-	// 	drawmove(event);
-	// 	isIdle = true;
-	// }
-
-	// canvas.addEventListener("mousedown", drawstart, false);
-	// canvas.addEventListener("mousemove", drawmove, false);
-	// canvas.addEventListener("mouseup", drawend, false);
 
 	document.body.addEventListener("mouseup", bodyMouseUp);
 	document.body.addEventListener("mouseout", bodyMouseOut);
@@ -167,14 +117,69 @@ loadingModelPromise.then(() => {
 	ctx.fillText("Draw a number here!", CANVAS_SIZE / 2, CANVAS_SIZE / 2);
 });
 
-// window.addEventListener(
-// 	"load",
-// 	function () {
-// 		// get the canvas element and its context
-// 		var canvas = document.getElementById("sketchpad");
-// 		var context = canvas.getContext("2d");
-// 		var isIdle = true;
+const ongoingTouches = [];
 
-// 	},
-// 	false
-// );
+function handleStart(evt) {
+	evt.preventDefault();
+	const touches = evt.changedTouches;
+	offsetX = canvas.getBoundingClientRect().left;
+	offsetY = canvas.getBoundingClientRect().top;
+	for (let i = 0; i < touches.length; i++) {
+		ongoingTouches.push(copyTouch(touches[i]));
+	}
+}
+
+function handleMove(evt) {
+	evt.preventDefault();
+	const touches = evt.changedTouches;
+	for (let i = 0; i < touches.length; i++) {
+		const idx = ongoingTouchIndexById(touches[i].identifier);
+		if (idx >= 0) {
+			ctx.beginPath();
+			ctx.moveTo(
+				ongoingTouches[idx].clientX - offsetX,
+				ongoingTouches[idx].clientY - offsetY
+			);
+			ctx.lineTo(touches[i].clientX - offsetX, touches[i].clientY - offsetY);
+			ctx.closePath();
+			ctx.stroke();
+			ongoingTouches.splice(idx, 1, copyTouch(touches[i])); // swap in the new touch record
+
+			updatePredictions();
+		}
+	}
+}
+
+function handleEnd(evt) {
+	evt.preventDefault();
+	const touches = evt.changedTouches;
+	for (let i = 0; i < touches.length; i++) {
+		let idx = ongoingTouchIndexById(touches[i].identifier);
+		if (idx >= 0) {
+			ongoingTouches.splice(idx, 1); // remove it; we're done
+		}
+	}
+}
+
+function handleCancel(evt) {
+	evt.preventDefault();
+	const touches = evt.changedTouches;
+	for (let i = 0; i < touches.length; i++) {
+		let idx = ongoingTouchIndexById(touches[i].identifier);
+		ongoingTouches.splice(idx, 1); // remove it; we're done
+	}
+}
+
+function copyTouch({ identifier, clientX, clientY }) {
+	return { identifier, clientX, clientY };
+}
+
+function ongoingTouchIndexById(idToFind) {
+	for (let i = 0; i < ongoingTouches.length; i++) {
+		const id = ongoingTouches[i].identifier;
+		if (id === idToFind) {
+			return i;
+		}
+	}
+	return -1; // not found
+}
